@@ -15,6 +15,7 @@ import sys
 import textwrap
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import namedtuple
 
@@ -23,6 +24,16 @@ API = "https://prices.runescape.wiki/api/v1/osrs"
 PROJECT_URL = "https://github.com/korvanick/herb-money"
 CONTACT_ENV = "HERB_MONEY_CONTACT"
 TIMEOUT = 20
+
+# Jagex publishes skills but never a player's coins, so --capital stays a
+# number you supply. Each game mode keeps its own board.
+HISCORES = "https://secure.runescape.com/m={board}/index_lite.json?player={name}"
+HISCORE_BOARDS = {
+    "main": "hiscore_oldschool",
+    "ironman": "hiscore_oldschool_ironman",
+    "hardcore": "hiscore_oldschool_hardcore_ironman",
+    "ultimate": "hiscore_oldschool_ultimate",
+}
 
 
 def user_agent(contact):
@@ -198,6 +209,30 @@ class PriceFeed:
             if point.get("avgLowPrice")
         ]
         return max(prices) - min(prices) if len(prices) > 1 else None
+
+
+def fetch_levels(rsn, mode, contact):
+    """Skill levels from the OSRS hiscores as {skill: level}.
+
+    Returns (levels, problem): exactly one is None. A hiscores outage must
+    not take the dashboard down, so the caller falls back to the flags.
+    """
+    url = HISCORES.format(board=HISCORE_BOARDS[mode], name=urllib.parse.quote(rsn))
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent(contact)})
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            skills = json.loads(response.read().decode())["skills"]
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            other = " or ".join(m for m in HISCORE_BOARDS if m != mode)
+            return None, (f"{rsn} is not on the {mode} hiscores. Check the spelling, "
+                          f"or try --mode {other}.")
+        return None, f"Hiscores returned {error.code} for {rsn}; using the levels given."
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+        return None, f"Could not reach the hiscores ({error}); using the levels given."
+
+    # An unranked skill comes back as -1, which is not a level.
+    return {skill["name"]: max(1, skill["level"]) for skill in skills}, None
 
 
 def ge_tax(price):
@@ -438,8 +473,14 @@ def wrap(text, width, colour):
 
 
 def header_segments(options, nature_price):
-    segments = [
-        ("DEGRIME PROFIT", f"{BOLD}DEGRIME PROFIT{RESET}"),
+    segments = [("DEGRIME PROFIT", f"{BOLD}DEGRIME PROFIT{RESET}")]
+    if options.rsn and not options.notice:
+        # Name the source, but only when the lookup actually supplied the
+        # levels: the hiscores are a periodic snapshot, so a level read from
+        # them can trail what you actually have.
+        text = f"{options.rsn} ({options.mode})"
+        segments.append((text, f"{CYAN}{options.rsn}{RESET} {GREY}({options.mode}){RESET}"))
+    segments += [
         (f"Herblore {options.herblore}", f"Herblore {CYAN}{options.herblore}{RESET}"),
         (f"Magic {options.magic}", f"Magic {CYAN}{options.magic}{RESET}"),
     ]
@@ -483,6 +524,8 @@ def render(rows, nature_price, options, status, width):
     heading = GAP.join(align(column.heading, column) for column in columns)
 
     lines = pack(header_segments(options, nature_price), width)
+    if options.notice:
+        lines += wrap(options.notice, width, YELLOW)
     if options.magic < DEGRIME_MAGIC_LEVEL:
         lines += wrap(f"Degrime needs {DEGRIME_MAGIC_LEVEL} Magic - you have "
                       f"{options.magic}. Rates below are unreachable for now.", width, YELLOW)
@@ -599,9 +642,24 @@ def parse_options():
     parser.add_argument("--contact", default=os.environ.get(CONTACT_ENV),
                         help=f"your contact for the wiki API's User-Agent, e.g. "
                              f"'@you on Discord'; defaults to ${CONTACT_ENV}")
+    parser.add_argument("--rsn", help="look your Herblore and Magic up on the hiscores")
+    parser.add_argument("--mode", choices=tuple(HISCORE_BOARDS), default="main",
+                        help="which hiscore board --rsn sits on (default: main)")
     args = parser.parse_args()
 
-    interactive = args.herblore is None and args.magic is None and args.focus is None
+    # Precedence: an explicit level always wins, so you can still ask what a
+    # level you have not reached yet would look like.
+    args.notice = None
+    if args.rsn:
+        levels, args.notice = fetch_levels(args.rsn, args.mode, args.contact)
+        if levels:
+            args.herblore = args.herblore or levels.get("Herblore")
+            args.magic = args.magic or levels.get("Magic")
+
+    # --rsn is an explicit instruction to fetch, so a failed lookup falls back
+    # to the defaults with a visible notice rather than blocking on a prompt.
+    interactive = (args.rsn is None and args.herblore is None
+                   and args.magic is None and args.focus is None)
     if args.herblore is None:
         args.herblore = ask_number("Herblore level", 99, 1, 99) if interactive else 99
     if args.magic is None:
