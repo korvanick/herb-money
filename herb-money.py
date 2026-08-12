@@ -211,13 +211,13 @@ class PriceFeed:
         return max(prices) - min(prices) if len(prices) > 1 else None
 
 
-def fetch_levels(rsn, mode, contact):
+def fetch_levels(username, mode, contact):
     """Skill levels from the OSRS hiscores as {skill: level}.
 
     Returns (levels, problem): exactly one is None. A hiscores outage must
     not take the dashboard down, so the caller falls back to the flags.
     """
-    url = HISCORES.format(board=HISCORE_BOARDS[mode], name=urllib.parse.quote(rsn))
+    url = HISCORES.format(board=HISCORE_BOARDS[mode], name=urllib.parse.quote(username))
     request = urllib.request.Request(url, headers={"User-Agent": user_agent(contact)})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
@@ -225,9 +225,9 @@ def fetch_levels(rsn, mode, contact):
     except urllib.error.HTTPError as error:
         if error.code == 404:
             other = " or ".join(m for m in HISCORE_BOARDS if m != mode)
-            return None, (f"{rsn} is not on the {mode} hiscores. Check the spelling, "
+            return None, (f"{username} is not on the {mode} hiscores. Check the spelling, "
                           f"or try --mode {other}.")
-        return None, f"Hiscores returned {error.code} for {rsn}; using the levels given."
+        return None, f"Hiscores returned {error.code} for {username}; using the levels given."
     except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
         return None, f"Could not reach the hiscores ({error}); using the levels given."
 
@@ -474,12 +474,12 @@ def wrap(text, width, colour):
 
 def header_segments(options, nature_price):
     segments = [("DEGRIME PROFIT", f"{BOLD}DEGRIME PROFIT{RESET}")]
-    if options.rsn and not options.notice:
+    if options.username and not options.notice:
         # Name the source, but only when the lookup actually supplied the
         # levels: the hiscores are a periodic snapshot, so a level read from
         # them can trail what you actually have.
-        text = f"{options.rsn} ({options.mode})"
-        segments.append((text, f"{CYAN}{options.rsn}{RESET} {GREY}({options.mode}){RESET}"))
+        text = f"{options.username} ({options.mode})"
+        segments.append((text, f"{CYAN}{options.username}{RESET} {GREY}({options.mode}){RESET}"))
     segments += [
         (f"Herblore {options.herblore}", f"Herblore {CYAN}{options.herblore}{RESET}"),
         (f"Magic {options.magic}", f"Magic {CYAN}{options.magic}{RESET}"),
@@ -642,23 +642,23 @@ def parse_options():
     parser.add_argument("--contact", default=os.environ.get(CONTACT_ENV),
                         help=f"your contact for the wiki API's User-Agent, e.g. "
                              f"'@you on Discord'; defaults to ${CONTACT_ENV}")
-    parser.add_argument("--rsn", help="look your Herblore and Magic up on the hiscores")
+    parser.add_argument("--username", help="look your Herblore and Magic up on the hiscores")
     parser.add_argument("--mode", choices=tuple(HISCORE_BOARDS), default="main",
-                        help="which hiscore board --rsn sits on (default: main)")
+                        help="which hiscore board --username sits on (default: main)")
     args = parser.parse_args()
 
     # Precedence: an explicit level always wins, so you can still ask what a
     # level you have not reached yet would look like.
     args.notice = None
-    if args.rsn:
-        levels, args.notice = fetch_levels(args.rsn, args.mode, args.contact)
+    if args.username:
+        levels, args.notice = fetch_levels(args.username, args.mode, args.contact)
         if levels:
             args.herblore = args.herblore or levels.get("Herblore")
             args.magic = args.magic or levels.get("Magic")
 
-    # --rsn is an explicit instruction to fetch, so a failed lookup falls back
+    # --username is an explicit instruction to fetch, so a failed lookup falls back
     # to the defaults with a visible notice rather than blocking on a prompt.
-    interactive = (args.rsn is None and args.herblore is None
+    interactive = (args.username is None and args.herblore is None
                    and args.magic is None and args.focus is None)
     if args.herblore is None:
         args.herblore = ask_number("Herblore level", 99, 1, 99) if interactive else 99
