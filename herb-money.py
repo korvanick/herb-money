@@ -20,7 +20,7 @@ from collections import namedtuple
 
 # --- API -------------------------------------------------------------------
 API = "https://prices.runescape.wiki/api/v1/osrs"
-PROJECT_URL = "https://github.com/Korvanick/herb-money"
+PROJECT_URL = "https://github.com/korvanick/herb-money"
 CONTACT_ENV = "HERB_MONEY_CONTACT"
 TIMEOUT = 20
 
