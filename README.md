@@ -112,3 +112,9 @@ export HERB_MONEY_CONTACT="@you on Discord"
 Each endpoint is cached to its real update rate rather than refetched every poll, which is
 the main thing keeping this polite. `--no-swing` drops the per-herb history requests if you
 want a smaller footprint still.
+
+## License
+
+[MIT](LICENSE). Prices come from the RuneScape Wiki at runtime and are not redistributed
+here; their content is under
+[CC BY-NC-SA 3.0](https://oldschool.runescape.wiki/w/RuneScape:Copyrights).
