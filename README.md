@@ -22,18 +22,23 @@ Cadantine       2,139 ↓1      2,319         2,320     122.3    123.3     1.49M
 Toadflax        2,013         2,185 ↓14     2,200     117.3    131.3     1.43M     1.60M  21,958
 Torstol         3,100         3,247 ↑12     3,247      71.3     71.3      866k      866k  10,457
 Avantoe         1,441 ↓25     1,544         1,554      61.3     70.3      745k      854k   8,138
-Marrentill        145           219           225      58.3     64.3      708k      781k   1,438!
 Guam*             196           249           249      37.3     37.3      453k      453k   4,534
 Irit            1,376 ↓14     1,414         1,480      -1.7     63.3      -21k      769k  11,892
 Ranarr$         5,554         5,785 ↓1      5,800     104.3    118.3     1.27M     1.44M  23,764
+Marrentill        145           219           225      58.3     64.3      708k      781k   1,438!
 Huasca*$        5,761         5,825         5,863     -63.7    -26.7     -774k     -324k   1,578!
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 Best: Kwuarm  ·  Low 1.68M/hr  ·  24.92M capital/hr  ·  6.74% ROI
 * price older than 10m
 ? sell-high print is below sell-low, so Prof-H is unreliable
 $ needs more than your capital
-! under 2,000 clean trades in the last hour
+! under 2,000 clean trades in the last hour, so ranked last and never picked as best
 ```
+
+Marrentill is the shape of thing this is for. On paper it is the sixth best herb on
+screen and better than Guam; in practice 1,438 clean trades an hour is not a market you
+can dump 12,000 herbs into, so it sits at the bottom with everything else too thin to
+sell rather than tempting you from mid-table.
 
 ## Running it
 
@@ -74,18 +79,19 @@ is a loss on most of them and is deliberately not modelled.
 | Column | Meaning |
 | --- | --- |
 | `Buy Δ`, `Sell-L Δ` | Price, and how far it moved against the last 5m average. Colour says whether that movement helps you, so a rising buy price is red and a rising sell price is green |
-| `Prof-L`, `Prof-H` | Profit per herb after tax and runes, dumping or waiting |
+| `Prof-L`, `Prof-H` | Profit per herb after tax and runes, dumping or waiting. `Prof-L` is bold, since most of the table is green and this is the figure to land on first |
 | `GP/hr-L`, `GP/hr-H` | The same, per hour of cleaning |
 | `Cap/hr` | GP tied up to sustain an hour of it |
 | `ROI%` | Profit per gp invested. Ranks very differently from raw profit |
 | `1h Sw` | How far the buy price moved over the last hour, coloured against your own margin. Red means the swing is wider than the margin, so the margin is noise |
 | `Age` | How stale the price is |
-| `1h Vol` | Clean-side trades in the last hour. That is the side you have to offload |
+| `1h Vol` | Clean-side trades in the last hour. That is the side you have to offload. Under 2,000 earns a `!`, which sinks the herb to the bottom of the table and takes it out of the running for best |
 
 Dimmed rows are out of reach, either above your Herblore level or over your capital.
 
-The table reflows to the terminal, dropping the least important columns as it narrows, down
-to a 23-column floor. Prices keep their deltas at every width.
+The table reflows to the terminal as you resize it, dropping the least important columns as
+it narrows, down to a 23-column floor. Prices keep their deltas at every width. Resizing
+redraws immediately and costs no requests; it does not wait for the next minute's prices.
 
 ## How profit is worked out
 

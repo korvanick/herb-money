@@ -47,6 +47,9 @@ def user_agent(contact):
     return f"{project} - {contact}" if contact else project
 
 POLL_RATE = 60
+# The terminal is watched this often between polls, so a resize reflows the
+# table straight away instead of staying wrapped until the next fetch.
+RESIZE_POLL = 0.25
 # /5m and /1h only produce new data on their own cadence, so re-requesting them
 # every poll is wasted load on the API for identical bytes.
 LATEST_TTL = 0
@@ -117,6 +120,7 @@ SHOW_CURSOR = "\033[?25h"
 STALE_MARK = "*"                # price older than STALE_AFTER
 COSTLY_MARK = "$"               # more capital than --capital allows
 SUSPECT_MARK = "?"              # sell-high print below sell-low, so unusable
+THIN_MARK = "!"                 # too few clean trades to offload into
 
 Column = namedtuple("Column", "key heading width right")
 
@@ -168,7 +172,7 @@ MIN_WIDTH = 23
 FALLBACK_SIZE = (138, 24)
 
 Row = namedtuple("Row", (
-    "name level locked buy buy_dir sell_low sell_high sell_dir suspect "
+    "name level locked thin buy buy_dir sell_low sell_high sell_dir suspect "
     "prof_low prof_high hr_low hr_high capital roi swing age stale xp_hr volume"
 ))
 
@@ -323,6 +327,9 @@ def build_rows(feed, options):
             level=level,
             locked=level > options.herblore or (
                 options.capital is not None and capital > options.capital),
+            # A margin you cannot offload is not a margin, so a thin herb is
+            # ranked below everything else and never offered as the best.
+            thin=volume < LOW_VOLUME,
             buy=buy,
             buy_dir=trend(buy, five_min.get(str(grimy_id), {}).get("avgLowPrice"), False),
             sell_low=sell_low,
@@ -344,9 +351,8 @@ def build_rows(feed, options):
             volume=volume,
         ))
 
-    key = (lambda row: (row.locked, -row.roi)) if options.sort == "roi" else (
-        lambda row: (row.locked, -row.hr_low))
-    rows.sort(key=key)
+    rank = (lambda row: -row.roi) if options.sort == "roi" else (lambda row: -row.hr_low)
+    rows.sort(key=lambda row: (row.thin, row.locked, rank(row)))
     return rows, nature_price
 
 
@@ -373,7 +379,6 @@ def swing_colour(swing, margin):
 
 
 def cells_for(row, options):
-    thin = row.volume < LOW_VOLUME
     marks = (STALE_MARK if row.stale else "") + (
         COSTLY_MARK if options.capital is not None and row.capital > options.capital else "")
 
@@ -387,7 +392,9 @@ def cells_for(row, options):
         "sell_high": (marked_cell(f"{row.sell_high:,}",
                                   SUSPECT_MARK if row.suspect else ""),
                       YELLOW if row.suspect else ""),
-        "prof_low": (f"{row.prof_low:,.1f}", profit_colour(row.prof_low)),
+        # Bolded: nearly every figure on the row is green, and this is the one
+        # the eye should land on first.
+        "prof_low": (f"{row.prof_low:,.1f}", BOLD + profit_colour(row.prof_low)),
         "prof_high": (f"{row.prof_high:,.1f}",
                       YELLOW if row.suspect else profit_colour(row.prof_high)),
         "hr_low": (gp(row.hr_low), profit_colour(row.hr_low)),
@@ -400,8 +407,8 @@ def cells_for(row, options):
         "age": ((age_text(row.age), YELLOW if row.stale else "")
                 if row.age is not None else ("-", GREY)),
         "xp_hr": (gp(row.xp_hr), CYAN),
-        "volume": (marked_cell(f"{row.volume:,}", "!" if thin else ""),
-                   YELLOW if thin else ""),
+        "volume": (marked_cell(f"{row.volume:,}", THIN_MARK if row.thin else ""),
+                   YELLOW if row.thin else ""),
     }
 
 
@@ -508,8 +515,9 @@ def footnotes(rows, options, shown):
         notes.append(f"{SUSPECT_MARK} sell-high print is below sell-low, so Prof-H is unreliable")
     if options.capital is not None and any(row.capital > options.capital for row in rows):
         notes.append(f"{COSTLY_MARK} needs more than your capital")
-    if "volume" in shown and any(row.volume < LOW_VOLUME for row in rows):
-        notes.append(f"! under {LOW_VOLUME:,} clean trades in the last hour")
+    if "volume" in shown and any(row.thin for row in rows):
+        notes.append(f"{THIN_MARK} under {LOW_VOLUME:,} clean trades in the last hour, "
+                     f"so ranked last and never picked as best")
     return notes
 
 
@@ -534,9 +542,11 @@ def render(rows, nature_price, options, status, width):
     lines += [format_row(cells_for(row, options), columns, row.locked) for row in rows]
     lines.append(rule)
 
-    unlocked = [row for row in rows if not row.locked]
-    if unlocked:
-        best = unlocked[0]
+    # A thin herb can top the table on paper and still be unsellable, so the
+    # recommendation is drawn only from herbs there is a market to dump into.
+    candidates = [row for row in rows if not row.locked and not row.thin]
+    if candidates:
+        best = candidates[0]
         # The table already carries the tick-perfect figures, so this line
         # gives only what to actually expect. Spelling out Low and High here
         # is what teaches the table's -L and -H suffixes.
@@ -551,6 +561,9 @@ def render(rows, nature_price, options, status, width):
             (f"{best.roi:.2f}% ROI",) * 2,
         ]
         lines += pack(best_segments, width)
+    elif any(not row.locked for row in rows):
+        lines += wrap(f"No herb in reach cleared {LOW_VOLUME:,} clean trades in the last hour, "
+                      f"so nothing is offered as best.", width, YELLOW)
 
     for note in footnotes(rows, options, shown):
         lines += wrap(note, width, GREY)
@@ -590,6 +603,10 @@ def draw(lines):
     # Overwrite in place rather than clearing the screen, which flickers.
     sys.stdout.write("\033[H" + "\033[K\n".join(lines) + "\033[K\033[0J")
     sys.stdout.flush()
+
+
+def terminal_width():
+    return max(shutil.get_terminal_size(FALLBACK_SIZE).columns, MIN_WIDTH)
 
 
 def parse_capital(text):
@@ -679,20 +696,30 @@ def main():
     options = parse_options()
     feed = PriceFeed(options.contact)
     rows, nature_price, status = [], 0, ""
+    width, next_poll = 0, 0.0
 
     sys.stdout.write(HIDE_CURSOR + "\033[2J")
     try:
         while True:
-            try:
-                rows, nature_price = build_rows(feed, options)
-                status = ""
-            except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
-                status = f"Update failed ({error}) - retrying in {POLL_RATE}s"
+            due = time.monotonic() >= next_poll
+            if due:
+                try:
+                    rows, nature_price = build_rows(feed, options)
+                    status = ""
+                except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+                    status = f"Update failed ({error}) - retrying in {POLL_RATE}s"
+                next_poll = time.monotonic() + POLL_RATE
 
-            # Re-read the size every frame so resizing reflows the table.
-            width = max(shutil.get_terminal_size(FALLBACK_SIZE).columns, MIN_WIDTH)
-            draw(render(rows, nature_price, options, status, width))
-            time.sleep(POLL_RATE)
+            # Sleeping out the whole poll would leave a window resized just
+            # after a frame wrapped for the best part of a minute, so the size
+            # is watched between polls and the table redrawn the moment it
+            # changes. Redrawing costs nothing: no request is made for it.
+            current = terminal_width()
+            if due or current != width:
+                width = current
+                draw(render(rows, nature_price, options, status, width))
+
+            time.sleep(min(RESIZE_POLL, max(0.0, next_poll - time.monotonic())))
     except KeyboardInterrupt:
         pass
     finally:
