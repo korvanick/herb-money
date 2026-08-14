@@ -168,7 +168,16 @@ DROP_ORDER = (
 )
 GAP = "  "
 SEPARATOR = "  ·  "
-MIN_WIDTH = 23
+# The two figures a decision actually rests on. They are boxed off with a rule
+# rather than bolded: on a row where nearly every number is green, an outline
+# separates them from their neighbours in a way another bright cell cannot.
+OUTLINED = ("prof_low", "hr_low")
+BORDER = "│"
+# Corners for the three rules, each as (opens a box, closes one, does both).
+TOP_JOINTS = "┌┐┬"
+MID_JOINTS = "├┤┼"
+BOTTOM_JOINTS = "└┘┴"
+MIN_WIDTH = 26
 FALLBACK_SIZE = (138, 24)
 
 Row = namedtuple("Row", (
@@ -392,9 +401,7 @@ def cells_for(row, options):
         "sell_high": (marked_cell(f"{row.sell_high:,}",
                                   SUSPECT_MARK if row.suspect else ""),
                       YELLOW if row.suspect else ""),
-        # Bolded: nearly every figure on the row is green, and this is the one
-        # the eye should land on first.
-        "prof_low": (f"{row.prof_low:,.1f}", BOLD + profit_colour(row.prof_low)),
+        "prof_low": (f"{row.prof_low:,.1f}", profit_colour(row.prof_low)),
         "prof_high": (f"{row.prof_high:,.1f}",
                       YELLOW if row.suspect else profit_colour(row.prof_high)),
         "hr_low": (gp(row.hr_low), profit_colour(row.hr_low)),
@@ -416,8 +423,56 @@ def align(text, column):
     return f"{text:>{column.width}}" if column.right else f"{text:<{column.width}}"
 
 
+def edges(columns):
+    """Which side of an outlined column each gap sits on, gap by gap.
+
+    There is one entry per gap, including the two outside the table. A gap
+    opens a box where an outlined column starts, closes one where an outlined
+    column ends, and does both where two of them are left side by side. The
+    rules pick their corner from this, so a plain column that happens to sit
+    between two outlined ones is never drawn as though it were boxed as well.
+    """
+    keys = [column.key for column in columns]
+    kinds = []
+    for index in range(len(columns) + 1):
+        opens = index < len(keys) and keys[index] in OUTLINED
+        closes = index > 0 and keys[index - 1] in OUTLINED
+        kinds.append("both" if opens and closes else
+                     "opens" if opens else "closes" if closes else None)
+    return kinds
+
+
+def separators(columns):
+    """The gap text between columns, plus the two outside the table."""
+    parts = []
+    for index, kind in enumerate(edges(columns)):
+        outside = index in (0, len(columns))
+        if kind is None:
+            parts.append("" if outside else GAP)
+        else:
+            parts.append(("" if index == 0 else " ")
+                         + BORDER + ("" if index == len(columns) else " "))
+    return parts
+
+
+def stitch(parts, columns, border=BORDER):
+    gaps = [gap.replace(BORDER, border) for gap in separators(columns)]
+    return "".join(gap + part for gap, part in zip(gaps, parts)) + gaps[-1]
+
+
 def table_width(columns):
-    return sum(column.width for column in columns) + len(GAP) * (len(columns) - 1)
+    return (sum(column.width for column in columns)
+            + sum(len(gap) for gap in separators(columns)))
+
+
+def rule_line(columns, joints):
+    """A horizontal rule meeting the outline with the corners in `joints`."""
+    corner = dict(zip(("opens", "closes", "both"), joints))
+    gaps = [gap.replace(" ", "─").replace(BORDER, corner[kind]) if kind else "─" * len(gap)
+            for gap, kind in zip(separators(columns), edges(columns))]
+    spans = ["─" * column.width for column in columns]
+    body = "".join(gap + span for gap, span in zip(gaps, spans)) + gaps[-1]
+    return f"{GREY}{body}{RESET}"
 
 
 def fit_columns(width, protected=(), excluded=()):
@@ -438,14 +493,15 @@ def fit_columns(width, protected=(), excluded=()):
 
 def format_row(cells, columns, locked):
     if locked:
-        # A dimmed row carries no other colour, so pad first and dim the whole.
-        return DIM + GAP.join(align(cells[c.key][0], c) for c in columns) + RESET
+        # A dimmed row carries no other colour, so pad first and dim the whole,
+        # outline included.
+        return DIM + stitch([align(cells[c.key][0], c) for c in columns], columns) + RESET
     parts = []
     for column in columns:
         text, colour = cells[column.key]
         padded = align(text, column)
         parts.append(f"{colour}{padded}{RESET}" if colour else padded)
-    return GAP.join(parts)
+    return stitch(parts, columns, f"{GREY}{BORDER}{RESET}")
 
 
 def pack(segments, width):
@@ -528,8 +584,8 @@ def render(rows, nature_price, options, status, width):
         excluded=() if options.swing else ("swing",),
     )
     shown = {column.key for column in columns}
-    rule = f"{GREY}{'─' * table_width(columns)}{RESET}"
-    heading = GAP.join(align(column.heading, column) for column in columns)
+    heading = stitch([f"{BOLD}{align(column.heading, column)}{RESET}" for column in columns],
+                     columns, f"{GREY}{BORDER}{RESET}")
 
     lines = pack(header_segments(options, nature_price), width)
     if options.notice:
@@ -538,9 +594,9 @@ def render(rows, nature_price, options, status, width):
         lines += wrap(f"Degrime needs {DEGRIME_MAGIC_LEVEL} Magic - you have "
                       f"{options.magic}. Rates below are unreachable for now.", width, YELLOW)
 
-    lines += [rule, f"{BOLD}{heading}{RESET}", rule]
+    lines += [rule_line(columns, TOP_JOINTS), heading, rule_line(columns, MID_JOINTS)]
     lines += [format_row(cells_for(row, options), columns, row.locked) for row in rows]
-    lines.append(rule)
+    lines.append(rule_line(columns, BOTTOM_JOINTS))
 
     # A thin herb can top the table on paper and still be unsellable, so the
     # recommendation is drawn only from herbs there is a market to dump into.
